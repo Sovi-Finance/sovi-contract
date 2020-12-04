@@ -44,7 +44,6 @@ contract SoviProtocol is Ownable {
 
     // Badge Pool Info
     struct BadgePoolInfo {
-        address defaultAddress;
         bool enable;
         IBadgePool badgePool;
         uint256 ratio;
@@ -95,7 +94,6 @@ contract SoviProtocol is Ownable {
         SoviToken _SOVI,
         IReferral _hSOV,
         address _devAddr,
-        address _badgePoolAddr,
         uint256 _startBlock,
         address usdtContract,
         address uniPoolAddress
@@ -115,7 +113,6 @@ contract SoviProtocol is Ownable {
         reductionBlockCount = DAILY_BLOCKS.mul(21);
         nextReductionBlock = _startBlock.add(DAILY_BLOCKS.mul(14));
 
-        badgePoolInfo.defaultAddress = _badgePoolAddr;
         hSOV = _hSOV;
         USDT_CONTRACT = ERC20(usdtContract);
         SOVI_POOL_ADDRESS = address(uniPoolAddress);
@@ -156,7 +153,7 @@ contract SoviProtocol is Ownable {
 
     // Update badgePool address by the previous badgePool address.
     function setBadgePool(bool _enable, IBadgePool _addr, uint256 _ratio) public onlyOwner {
-        require(address(_addr) != address(0), "!empty");
+        require(address(_addr) != address(0), "empty!");
         badgePoolInfo.enable = _enable;
         badgePoolInfo.badgePool = _addr;
         badgePoolInfo.ratio = _ratio;
@@ -175,6 +172,11 @@ contract SoviProtocol is Ownable {
         if (block.number > _pool.lastRewardBlock && _pool.totalAmount != 0) {
             uint256 blockReward = getBlocksReward(_pool.lastRewardBlock, block.number);
             uint256 poolReward = blockReward.mul(_pool.allocPoint).div(totalAllocPoint);
+            // Assign reward to badge pool
+            if (badgePoolInfo.enable){
+                uint256 badgePoolAmount = poolReward.mul(badgePoolInfo.ratio).div(HUNDRED);
+                poolReward = poolReward.sub(badgePoolAmount);
+            }
             accRewardPerShare = accRewardPerShare.add(poolReward.mul(1e18).div(_pool.totalAmount));
         }
         uint256 _pending = _user.amount.mul(accRewardPerShare).div(1e18).add(_user.refRewardDebt).add(_user.yieldRewardDebt).sub(_user.rewardDebt);
@@ -233,8 +235,11 @@ contract SoviProtocol is Ownable {
         uint256 blockReward = getBlocksReward(pool.lastRewardBlock, block.number);
         uint256 poolReward = blockReward.mul(pool.allocPoint).div(totalAllocPoint);
         SOVI.mint(devAddr, poolReward.div(TEN));
-        if (badgePoolInfo.enable && badgePoolInfo.ratio > 0) {
-            SOVI.mint(getBadgePoolAddress(), poolReward.mul(badgePoolInfo.ratio).div(HUNDRED));
+        // Assign reward to badge pool
+        if (badgePoolInfo.enable){
+            uint256 badgePoolAmount = poolReward.mul(badgePoolInfo.ratio).div(HUNDRED);
+            mintToBadgePool(badgePoolAmount);
+            poolReward = poolReward.sub(badgePoolAmount);
         }
         SOVI.mint(address(this), poolReward);
         pool.accRewardPerShare = pool.accRewardPerShare.add(poolReward.mul(1e18).div(lpSupply));
@@ -252,7 +257,7 @@ contract SoviProtocol is Ownable {
         uint256 refNReward = ref0Reward;
         address[] memory refs = hSOV.getReferrals(_addr);
         if (refs.length == 0 || (refs.length == 1 && userInfo[_pid][refs[0]].extraRebateRatio == 0)) {
-            SOVI.mint(getBadgePoolAddress(), ref0Reward.add(refNReward));
+            mintToBadgePool(ref0Reward.add(refNReward));
             return;
         }
 
@@ -286,7 +291,7 @@ contract SoviProtocol is Ownable {
             SOVI.mint(address(this), _thisReward);
         }
         if (_badgePoolReward > 0) {
-            SOVI.mint(getBadgePoolAddress(), _badgePoolReward);
+            mintToBadgePool(_badgePoolReward);
         }
     }
 
@@ -369,12 +374,11 @@ contract SoviProtocol is Ownable {
         return usdtInUni.mul(_lpAmount).div(lpTotalSupply);
     }
 
-    // Return current badge pool addr
-    function getBadgePoolAddress() public view returns (address){
-        if (!badgePoolInfo.enable) {
-            return badgePoolInfo.defaultAddress;
+    // Mint to badge pool when the pool is enable
+    function mintToBadgePool(uint256 _amount) internal {
+        if (badgePoolInfo.enable && badgePoolInfo.ratio > 0) {
+            SOVI.mint(address(badgePoolInfo.badgePool), _amount);
         }
-        return address(badgePoolInfo.badgePool);
     }
 
     // Deposit LP tokens to Sovi for SOVI allocation.
