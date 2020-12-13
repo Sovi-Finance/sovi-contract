@@ -3,6 +3,7 @@ pragma solidity 0.6.2;
 
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/math/Math.sol";
 import "./SoviToken.sol";
 import "./IReferral.sol";
 import "./IBadgePool.sol";
@@ -80,10 +81,10 @@ contract SoviProtocol is Ownable {
     uint256 public REBATE_PERSONAL_LIMIT_MIN = 500;
     uint256 public REBATE_PERSONAL_LIMIT_MAX = 5000;
     uint256 public REBATE_PERSONAL_GAP_RATIO = 10;
+    uint256 public REBATE_MAX_LEVEL = 2;
 
     uint256 public TEN = 10;
     uint256 public HUNDRED = 100;
-
     uint256 public DAILY_BLOCKS = 6646;
 
     IReferral public hSOV;
@@ -173,7 +174,7 @@ contract SoviProtocol is Ownable {
             uint256 blockReward = getBlocksReward(_pool.lastRewardBlock, block.number);
             uint256 poolReward = blockReward.mul(_pool.allocPoint).div(totalAllocPoint);
             // Assign reward to badge pool
-            if (badgePoolInfo.enable){
+            if (badgePoolInfo.enable) {
                 uint256 badgePoolAmount = poolReward.mul(badgePoolInfo.ratio).div(HUNDRED);
                 poolReward = poolReward.sub(badgePoolAmount);
             }
@@ -235,12 +236,7 @@ contract SoviProtocol is Ownable {
         uint256 blockReward = getBlocksReward(pool.lastRewardBlock, block.number);
         uint256 poolReward = blockReward.mul(pool.allocPoint).div(totalAllocPoint);
         SOVI.mint(devAddr, poolReward.div(TEN));
-        // Assign reward to badge pool
-        if (badgePoolInfo.enable){
-            uint256 badgePoolAmount = poolReward.mul(badgePoolInfo.ratio).div(HUNDRED);
-            mintToBadgePool(badgePoolAmount);
-            poolReward = poolReward.sub(badgePoolAmount);
-        }
+        mintToBadgePool(poolReward.mul(badgePoolInfo.ratio).div(HUNDRED));
         SOVI.mint(address(this), poolReward);
         pool.accRewardPerShare = pool.accRewardPerShare.add(poolReward.mul(1e18).div(lpSupply));
         pool.lastRewardBlock = block.number;
@@ -253,37 +249,27 @@ contract SoviProtocol is Ownable {
             return;
         }
 
-        uint256 ref0Reward = _yield.mul(REBATE_BASIC_RATIO).div(HUNDRED.mul(2));
-        uint256 refNReward = ref0Reward;
+        // Referrals
         address[] memory refs = hSOV.getReferrals(_addr);
-        if (refs.length == 0 || (refs.length == 1 && userInfo[_pid][refs[0]].extraRebateRatio == 0)) {
-            mintToBadgePool(ref0Reward.add(refNReward));
+
+        uint256 refReward = _yield.mul(REBATE_BASIC_RATIO).div(HUNDRED);
+        if (refs.length == 0) {
+            mintToBadgePool(refReward);
             return;
         }
 
+        // Maximum 2 levels
+        uint256 level = Math.min(REBATE_MAX_LEVEL, refs.length);
+        uint256 levelReward = refReward.div(level);
         uint256 _badgePoolReward;
         uint256 _thisReward;
 
-        if (userInfo[_pid][refs[0]].extraRebateRatio > 0) {
-            _thisReward = _thisReward.add(ref0Reward);
-            userInfo[_pid][refs[0]].pendingRebate = userInfo[_pid][refs[0]].pendingRebate.add(ref0Reward);
-        } else {
-            _badgePoolReward = _badgePoolReward.add(ref0Reward);
-        }
-
-        if (refs.length == 1) {
-            _badgePoolReward = _badgePoolReward.add(ref0Reward);
-        } else {
-            uint256 rewardPerRef = refNReward.div(refs.length.sub(1));
-            if (rewardPerRef > 0) {
-                for (uint256 idx = 1; idx < refs.length; idx ++) {
-                    if (userInfo[_pid][refs[idx]].extraRebateRatio > 0) {
-                        _thisReward = _thisReward.add(rewardPerRef);
-                        userInfo[_pid][refs[idx]].pendingRebate = userInfo[_pid][refs[idx]].pendingRebate.add(rewardPerRef);
-                    } else {
-                        _badgePoolReward = _badgePoolReward.add(rewardPerRef);
-                    }
-                }
+        for (uint256 idx = 0; idx < level; idx ++) {
+            if (userInfo[_pid][refs[idx]].extraRebateRatio == 0) {
+                _badgePoolReward.add(levelReward);
+            } else {
+                _thisReward.add(levelReward);
+                userInfo[_pid][refs[idx]].pendingRebate = userInfo[_pid][refs[idx]].pendingRebate.add(levelReward);
             }
         }
 
@@ -376,7 +362,7 @@ contract SoviProtocol is Ownable {
 
     // Mint to badge pool when the pool is enable
     function mintToBadgePool(uint256 _amount) internal {
-        if (badgePoolInfo.enable && badgePoolInfo.ratio > 0) {
+        if (badgePoolInfo.enable && _amount > 0) {
             SOVI.mint(address(badgePoolInfo.badgePool), _amount);
         }
     }
