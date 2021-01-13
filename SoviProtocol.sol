@@ -1,4 +1,4 @@
-pragma solidity 0.6.2;
+pragma solidity 0.6.8;
 
 
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
@@ -19,6 +19,7 @@ contract SoviProtocol is Ownable {
     using SafeERC20 for IERC20;
 
     // Events
+    event ChangedReward(uint256 indexed pid, uint256 reward);
     event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
     event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
     event EmergencyWithdraw(address indexed user, uint256 indexed pid, uint256 amount);
@@ -60,6 +61,8 @@ contract SoviProtocol is Ownable {
     PoolInfo[] public poolInfo;
     // Info of each user that stakes LP/BPT tokens.
     mapping(uint256 => mapping(address => UserInfo)) public userInfo;
+    // Info of each user that stakes LP/BPT tokens.
+    mapping(address => bool) public existedPool;
     // Badge Pool Info
     BadgePoolInfo public badgePoolInfo;
     // Total allocation points. Must be the sum of all allocation points in all pools.
@@ -74,18 +77,20 @@ contract SoviProtocol is Ownable {
     uint256 public reductionCounter;
     uint256 public reductionPercent;
 
-    // Info of rebate
-    uint256 public REBATE_HSOV_BASE = uint256(1000).mul(1e18);
-    uint256 public REBATE_BASIC_RATIO = 6;
-    uint256 public REBATE_BASIC_GAP = 1;
-    uint256 public REBATE_PERSONAL_LIMIT_MIN = 500;
-    uint256 public REBATE_PERSONAL_LIMIT_MAX = 5000;
-    uint256 public REBATE_PERSONAL_GAP_RATIO = 10;
-    uint256 public REBATE_MAX_LEVEL = 2;
+    // Constants
+    uint256 public constant DECIMALS = 1e18;
+    uint256 public constant TEN = 10;
+    uint256 public constant HUNDRED = 100;
+    uint256 public constant DAILY_BLOCKS = 664;
 
-    uint256 public TEN = 10;
-    uint256 public HUNDRED = 100;
-    uint256 public DAILY_BLOCKS = 6646;
+    // Info of rebate
+    uint256 public REBATE_BASIC_RATIO = 6;
+    uint256 public REBATE_HSOV_BASE = uint256(1000).mul(DECIMALS);
+    uint256 public constant REBATE_BASIC_GAP = 1;
+    uint256 public constant REBATE_PERSONAL_LIMIT_MIN = 500;
+    uint256 public constant REBATE_PERSONAL_LIMIT_MAX = 5000;
+    uint256 public constant REBATE_PERSONAL_GAP_RATIO = 10;
+    uint256 public constant REBATE_MAX_LEVEL = 2;
 
     IReferral public hSOV;
     ERC20 public USDT_CONTRACT = ERC20(0x0);
@@ -101,22 +106,25 @@ contract SoviProtocol is Ownable {
     ) public {
 
         // TODO NOTE: Replace with the address in the mainnet before deploy
+        require(address(_SOVI) != address(0), "SoviProtocol: SOVI is the zero address");
+        require(address(_hSOV) != address(0), "SoviProtocol: hSOV is the zero address");
+        require(_devAddr != address(0), "SoviProtocol: devAddr is the zero address");
+        require(address(usdtContract) != address(0), "SoviProtocol: usdtContract is the zero address");
+        require(address(uniPoolAddress) != address(0), "SoviProtocol: uniPoolAddress is the zero address");
 
         SOVI = _SOVI;
         devAddr = _devAddr;
-        rewardPerBlock = TEN.mul(TEN ** uint256(_SOVI.decimals()));
+        hSOV = _hSOV;
+        USDT_CONTRACT = ERC20(usdtContract);
+        SOVI_POOL_ADDRESS = address(uniPoolAddress);
 
         startBlock = _startBlock;
         rewardEndBlock = _startBlock.add(DAILY_BLOCKS.mul(365));
-
+        rewardPerBlock = TEN.mul(TEN ** uint256(_SOVI.decimals()));
         maxReductionCount = 4;
         reductionPercent = 70;
         reductionBlockCount = DAILY_BLOCKS.mul(21);
         nextReductionBlock = _startBlock.add(DAILY_BLOCKS.mul(14));
-
-        hSOV = _hSOV;
-        USDT_CONTRACT = ERC20(usdtContract);
-        SOVI_POOL_ADDRESS = address(uniPoolAddress);
     }
 
     function poolLength() external view returns (uint256) {
@@ -124,7 +132,8 @@ contract SoviProtocol is Ownable {
     }
 
     // Add a new lp to the pool. Can only be called by the owner.
-    function add(uint256 _allocPoint, IERC20 _lpToken, bool _withUpdate, bool _enableRebate) public onlyOwner {
+    function add(uint256 _allocPoint, IERC20 _lpToken, bool _withUpdate, bool _enableRebate) external onlyOwner {
+        require(!existedPool[address(_lpToken)], "SoviProtocol: lpToken had been added!");
         if (_withUpdate) {
             massUpdatePools();
         }
@@ -143,7 +152,8 @@ contract SoviProtocol is Ownable {
     }
 
     // Update the given pool's SOVI allocation point. Can only be called by the owner.
-    function set(uint256 _pid, uint256 _allocPoint, bool _enableRebate, bool _withUpdate) public onlyOwner {
+    function set(uint256 _pid, uint256 _allocPoint, bool _enableRebate, bool _withUpdate) external onlyOwner {
+        require(_pid < poolInfo.length && _pid >= 0, "SoviProtocol: _pid is not exist");
         if (_withUpdate) {
             massUpdatePools();
         }
@@ -153,7 +163,7 @@ contract SoviProtocol is Ownable {
     }
 
     // Update badgePool address by the previous badgePool address.
-    function setBadgePool(bool _enable, IBadgePool _addr, uint256 _ratio) public onlyOwner {
+    function setBadgePool(bool _enable, IBadgePool _addr, uint256 _ratio) external onlyOwner {
         require(address(_addr) != address(0), "empty!");
         badgePoolInfo.enable = _enable;
         badgePoolInfo.badgePool = _addr;
@@ -178,9 +188,9 @@ contract SoviProtocol is Ownable {
                 uint256 badgePoolAmount = poolReward.mul(badgePoolInfo.ratio).div(HUNDRED);
                 poolReward = poolReward.sub(badgePoolAmount);
             }
-            accRewardPerShare = accRewardPerShare.add(poolReward.mul(1e18).div(_pool.totalAmount));
+            accRewardPerShare = accRewardPerShare.add(poolReward.mul(DECIMALS).div(_pool.totalAmount));
         }
-        uint256 _pending = _user.amount.mul(accRewardPerShare).div(1e18).add(_user.refRewardDebt).add(_user.yieldRewardDebt).sub(_user.rewardDebt);
+        uint256 _pending = _user.amount.mul(accRewardPerShare).div(DECIMALS).add(_user.refRewardDebt).add(_user.yieldRewardDebt).sub(_user.rewardDebt);
         return yieldCalc(_pid, _addr, _pending);
     }
 
@@ -197,7 +207,7 @@ contract SoviProtocol is Ownable {
             address u = _invitees[idx];
             _total_count = _total_count.add(1);
             _total_amount = _total_amount.add(userInfo[_pid][u].amount);
-            if (hSOV.getInvitees(_addr).length > 0) {
+            if (hSOV.getInvitees(u).length > 0) {
                 (uint256 _count, uint256 _amount) = selectInvitees(_pid, u);
                 _total_count = _total_count.add(_count);
                 _total_amount = _total_amount.add(_amount);
@@ -227,6 +237,7 @@ contract SoviProtocol is Ownable {
             reductionCounter = reductionCounter.add(uint256(1));
             rewardPerBlock = rewardPerBlock.mul(reductionPercent).div(HUNDRED);
             REBATE_BASIC_RATIO = REBATE_BASIC_RATIO.add(REBATE_BASIC_GAP);
+            emit ChangedReward(_pid, rewardPerBlock);
         }
         uint256 lpSupply = pool.totalAmount;
         if (lpSupply == 0) {
@@ -238,7 +249,7 @@ contract SoviProtocol is Ownable {
         SOVI.mint(devAddr, poolReward.div(TEN));
         mintToBadgePool(poolReward.mul(badgePoolInfo.ratio).div(HUNDRED));
         SOVI.mint(address(this), poolReward);
-        pool.accRewardPerShare = pool.accRewardPerShare.add(poolReward.mul(1e18).div(lpSupply));
+        pool.accRewardPerShare = pool.accRewardPerShare.add(poolReward.mul(DECIMALS).div(lpSupply));
         pool.lastRewardBlock = block.number;
     }
 
@@ -266,9 +277,9 @@ contract SoviProtocol is Ownable {
 
         for (uint256 idx = 0; idx < level; idx ++) {
             if (userInfo[_pid][refs[idx]].extraRebateRatio == 0) {
-                _badgePoolReward.add(levelReward);
+                _badgePoolReward = _badgePoolReward.add(levelReward);
             } else {
-                _thisReward.add(levelReward);
+                _thisReward = _thisReward.add(levelReward);
                 userInfo[_pid][refs[idx]].pendingRebate = userInfo[_pid][refs[idx]].pendingRebate.add(levelReward);
             }
         }
@@ -368,7 +379,7 @@ contract SoviProtocol is Ownable {
     }
 
     // Deposit LP tokens to Sovi for SOVI allocation.
-    function deposit(uint256 _pid, uint256 _amount) public {
+    function deposit(uint256 _pid, uint256 _amount) external {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
         updatePool(_pid);
@@ -392,7 +403,7 @@ contract SoviProtocol is Ownable {
     }
 
     // Withdraw LP tokens from Sovi.
-    function withdraw(uint256 _pid, uint256 _amount) public {
+    function withdraw(uint256 _pid, uint256 _amount) external {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
         require(user.amount >= _amount, "withdraw: not good");
@@ -417,14 +428,16 @@ contract SoviProtocol is Ownable {
     // User total reward
     function totalReward(uint256 _pid, address _addr) internal view returns (uint256){
         UserInfo storage _user = userInfo[_pid][_addr];
-        return _user.amount.mul(poolInfo[_pid].accRewardPerShare).div(1e18).add(_user.refRewardDebt).add(_user.yieldRewardDebt);
+        return _user.amount.mul(poolInfo[_pid].accRewardPerShare).div(DECIMALS).add(_user.refRewardDebt).add(_user.yieldRewardDebt);
     }
 
     // Withdraw without caring about rewards. EMERGENCY ONLY.
-    function emergencyWithdraw(uint256 _pid) public {
+    function emergencyWithdraw(uint256 _pid) external {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
-        pool.lpToken.safeTransfer(address(msg.sender), user.amount);
+        uint256 amount = user.amount;
+        user.amount = 0;
+        pool.lpToken.safeTransfer(address(msg.sender), amount);
         emit EmergencyWithdraw(msg.sender, _pid, user.amount);
         delete userInfo[_pid][msg.sender];
     }
@@ -440,7 +453,7 @@ contract SoviProtocol is Ownable {
     }
 
     // Update dev address by the previous dev.
-    function dev(address _devAddr) public {
+    function dev(address _devAddr) external {
         require(msg.sender == devAddr, "dev: wut?");
         devAddr = _devAddr;
     }
