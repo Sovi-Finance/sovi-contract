@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: MIT
 pragma solidity 0.6.8;
 
 
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/math/Math.sol";
-import "./SoviToken.sol";
-import "./IReferral.sol";
-import "./IBadgePool.sol";
+import "./interface/IToken.sol";
+import "./interface/IReferral.sol";
+import "./interface/IBadgePool.sol";
 
 
 
@@ -52,7 +54,7 @@ contract SoviProtocol is Ownable {
     }
 
     // The SOVI TOKEN!
-    SoviToken public SOVI;
+    IToken public SOVI;
     // Dev address.
     address public devAddr;
     // SOVI tokens created per block.
@@ -93,11 +95,11 @@ contract SoviProtocol is Ownable {
     uint256 public constant REBATE_MAX_LEVEL = 2;
 
     IReferral public hSOV;
-    ERC20 public USDT_CONTRACT = ERC20(0x0);
-    address public SOVI_POOL_ADDRESS = address(0x0);
+    ERC20 public USDT_CONTRACT;
+    address public SOVI_POOL_ADDRESS;
 
     constructor(
-        SoviToken _SOVI,
+        IToken _SOVI,
         IReferral _hSOV,
         address _devAddr,
         uint256 _startBlock,
@@ -105,7 +107,6 @@ contract SoviProtocol is Ownable {
         address uniPoolAddress
     ) public {
 
-        // TODO NOTE: Replace with the address in the mainnet before deploy
         require(address(_SOVI) != address(0), "SoviProtocol: SOVI is the zero address");
         require(address(_hSOV) != address(0), "SoviProtocol: hSOV is the zero address");
         require(_devAddr != address(0), "SoviProtocol: devAddr is the zero address");
@@ -116,11 +117,11 @@ contract SoviProtocol is Ownable {
         devAddr = _devAddr;
         hSOV = _hSOV;
         USDT_CONTRACT = ERC20(usdtContract);
-        SOVI_POOL_ADDRESS = address(uniPoolAddress);
+        SOVI_POOL_ADDRESS = uniPoolAddress;
 
         startBlock = _startBlock;
         rewardEndBlock = _startBlock.add(DAILY_BLOCKS.mul(365));
-        rewardPerBlock = TEN.mul(TEN ** uint256(_SOVI.decimals()));
+        rewardPerBlock = TEN.mul(DECIMALS);
         maxReductionCount = 4;
         reductionPercent = 70;
         reductionBlockCount = DAILY_BLOCKS.mul(21);
