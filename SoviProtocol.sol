@@ -149,6 +149,7 @@ contract SoviProtocol is Ownable {
         totalAmount : 0,
         enableRebate : _enableRebate
         }));
+        existedPool[address(_lpToken)] = true;
     }
 
     // Update the given pool's SOVI allocation point. Can only be called by the owner.
@@ -183,11 +184,6 @@ contract SoviProtocol is Ownable {
         if (block.number > _pool.lastRewardBlock && _pool.totalAmount != 0) {
             uint256 blockReward = getBlocksReward(_pool.lastRewardBlock, block.number);
             uint256 poolReward = blockReward.mul(_pool.allocPoint).div(totalAllocPoint);
-            // Assign reward to badge pool
-            if (badgePoolInfo.enable) {
-                uint256 badgePoolAmount = poolReward.mul(badgePoolInfo.ratio).div(HUNDRED);
-                poolReward = poolReward.sub(badgePoolAmount);
-            }
             accRewardPerShare = accRewardPerShare.add(poolReward.mul(DECIMALS).div(_pool.totalAmount));
         }
         uint256 _pending = _user.amount.mul(accRewardPerShare).div(DECIMALS).add(_user.refRewardDebt).add(_user.yieldRewardDebt).sub(_user.rewardDebt);
