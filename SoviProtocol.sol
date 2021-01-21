@@ -34,6 +34,7 @@ contract SoviProtocol is Ownable {
         uint256 yieldRewardDebt;    // Claimed production reward.
         uint256 pendingRebate;      // Unclaimed rebate reward.
         uint256 extraRebateRatio;   // Extra rebate.
+        uint256 selfMined;          // Total self mined.
     }
 
     // Info of each pool.
@@ -178,6 +179,7 @@ contract SoviProtocol is Ownable {
     }
 
     // View function to see pending SOVIs on frontend.
+    // Return totalPending, totalSelfMined, totalRebateReward, extraYield, pendingRebate
     function pendingReward(uint256 _pid, address _addr) external view returns (uint256, uint256, uint256, uint256, uint256) {
         PoolInfo storage _pool = poolInfo[_pid];
         UserInfo storage _user = userInfo[_pid][_addr];
@@ -188,7 +190,12 @@ contract SoviProtocol is Ownable {
             accRewardPerShare = accRewardPerShare.add(poolReward.mul(DECIMALS).div(_pool.totalAmount));
         }
         uint256 _pending = _user.amount.mul(accRewardPerShare).div(DECIMALS).add(_user.refRewardDebt).add(_user.yieldRewardDebt).sub(_user.rewardDebt);
-        return yieldCalc(_pid, _addr, _pending);
+        uint256 _extraYield;
+        uint256 _pendingRebate;
+        uint256 _extraRebate;
+        uint256 _totalPending;
+        (, _extraYield, _pendingRebate, _extraRebate, _totalPending) = yieldCalc(_pid, _addr, _pending);
+        return (_totalPending, _user.selfMined.add(_user.yieldRewardDebt), _user.refRewardDebt, _extraYield, _pendingRebate);
     }
 
     // View function to see my army balance on frontend.
@@ -298,9 +305,11 @@ contract SoviProtocol is Ownable {
         uint256 _totalPending;
         (, _extraYield, _pendingRebate, _extraRebate, _totalPending) = yieldCalc(_pid, _addr, _pending);
         safeTokenTransfer(_addr, _pending.add(_pendingRebate));
+
         if (_extraYield > 0) {
             _user.yieldRewardDebt = _user.yieldRewardDebt.add(_extraYield);
         }
+
         if (_pendingRebate > 0) {
             _user.refRewardDebt = _user.refRewardDebt.add((_pendingRebate.add(_extraRebate)));
             _user.pendingRebate = 0;
@@ -311,6 +320,9 @@ contract SoviProtocol is Ownable {
         if (extraMint > 0) {
             SOVI.mint(_addr, extraMint);
         }
+
+        // Set self mined (pending + extraYield, exclude rebate reward)
+        _user.selfMined = _user.selfMined.add(_pending.add(_extraYield));
 
         // Rebate allocation
         setRebateReward(_addr, _pending, _pid);
@@ -356,7 +368,7 @@ contract SoviProtocol is Ownable {
             return uint256(0);
         }
         if (lpValue >= REBATE_PERSONAL_LIMIT_MAX) {
-            return uint256(100);
+            return HUNDRED;
         }
         return lpValue.mul(REBATE_PERSONAL_GAP_RATIO).div(REBATE_PERSONAL_LIMIT_MIN);
     }
